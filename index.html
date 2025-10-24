@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>模块坏点文件生成工具</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: "Segoe UI", "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #f7f7f7;
+      color: #222;
+    }
+
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 12px;
+      padding: 24px 32px 32px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 {
+      margin-top: 0;
+      font-size: 26px;
+    }
+
+    section + section {
+      margin-top: 24px;
+    }
+
+    label {
+      display: inline-block;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    input[type="file"],
+    select,
+    button,
+    input[type="text"] {
+      font-size: 14px;
+      padding: 8px 12px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      background-color: #fff;
+      box-sizing: border-box;
+    }
+
+    input[type="file"] {
+      padding: 4px;
+    }
+
+    button {
+      cursor: pointer;
+      background: #0078d4;
+      color: #fff;
+      border: none;
+      transition: background 0.2s ease;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      background: #9bb8d3;
+    }
+
+    button:not(:disabled):hover {
+      background: #005ea8;
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .grid.two-columns {
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 160px;
+      font-size: 13px;
+      line-height: 1.5;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      background: #fafafa;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+
+    .status {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    .status.error {
+      background: #fdecea;
+      color: #b71c1c;
+      border: 1px solid #f5c6c4;
+    }
+
+    .status.success {
+      background: #e6f4ea;
+      color: #1e4620;
+      border: 1px solid #b7dfb9;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 13px;
+    }
+
+    th, td {
+      padding: 6px 8px;
+      border: 1px solid #ddd;
+      text-align: left;
+    }
+
+    th {
+      background: #f0f4f8;
+      font-weight: 600;
+    }
+
+    @media (max-width: 640px) {
+      main {
+        padding: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>模块坏点文件生成工具</h1>
+    <p>加载模块描述表 <code>ini</code> 文件，系统会解析出 IO 与芯片管脚的映射关系，并依据坏点文件规则生成二进制文件。</p>
+
+    <section>
+      <label for="iniFile">选择模块描述表（.ini）</label>
+      <input id="iniFile" type="file" accept=".ini" />
+    </section>
+
+    <section class="grid two-columns">
+      <div>
+        <label for="panelName">输出文件名称</label>
+        <select id="panelName" disabled></select>
+      </div>
+      <div>
+        <label for="customName">或自定义文件名（无需扩展名）</label>
+        <input id="customName" type="text" placeholder="例如：P00012X12QA" />
+      </div>
+    </section>
+
+    <section class="grid two-columns">
+      <div>
+        <label>面板概要</label>
+        <table id="panelSummary" aria-live="polite"></table>
+      </div>
+      <div>
+        <label for="ioSummary">IO 解析结果</label>
+        <textarea id="ioSummary" readonly placeholder="载入 ini 后显示详细解析结果"></textarea>
+      </div>
+    </section>
+
+    <section>
+      <button id="generateBtn" disabled>生成 BIN 文件</button>
+      <div id="status" role="status" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <script>
+    const iniFileInput = document.getElementById('iniFile');
+    const panelNameSelect = document.getElementById('panelName');
+    const customNameInput = document.getElementById('customName');
+    const generateBtn = document.getElementById('generateBtn');
+    const panelSummaryTable = document.getElementById('panelSummary');
+    const ioSummaryTextarea = document.getElementById('ioSummary');
+    const statusBox = document.getElementById('status');
+
+    let parsedData = null;
+
+    iniFileInput.addEventListener('change', async (event) => {
+      resetUI();
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        const content = await file.text();
+        parsedData = parseIniFile(content);
+        renderSummary(parsedData);
+        statusMessage('解析成功，可以生成 BIN 文件。', 'success');
+        generateBtn.disabled = false;
+      } catch (error) {
+        console.error(error);
+        statusMessage(error.message || '解析 ini 文件失败。', 'error');
+        parsedData = null;
+      }
+    });
+
+    generateBtn.addEventListener('click', () => {
+      if (!parsedData) {
+        statusMessage('请先加载有效的 ini 文件。', 'error');
+        return;
+      }
+      try {
+        const payload = buildBinary(parsedData);
+        const blob = new Blob([payload], { type: 'application/octet-stream' });
+        const fileName = resolveFileName();
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(link.href);
+        statusMessage(`成功生成文件：${fileName}`, 'success');
+      } catch (error) {
+        console.error(error);
+        statusMessage(error.message || '生成 BIN 文件失败。', 'error');
+      }
+    });
+
+    function resetUI() {
+      panelSummaryTable.innerHTML = '';
+      ioSummaryTextarea.value = '';
+      panelNameSelect.innerHTML = '';
+      panelNameSelect.disabled = true;
+      generateBtn.disabled = true;
+      statusMessage('');
+    }
+
+    function parseIniFile(content) {
+      const lines = content.split(/\r?\n/);
+      const data = {};
+      let currentSection = null;
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith(';') || line.startsWith('#')) {
+          continue;
+        }
+        if (line.startsWith('[') && line.endsWith(']')) {
+          currentSection = line.slice(1, -1).trim();
+          if (!data[currentSection]) {
+            data[currentSection] = {};
+          }
+          continue;
+        }
+        const separatorIndex = line.indexOf('=');
+        if (separatorIndex === -1) {
+          throw new Error(`无法识别的行：${line}`);
+        }
+        const key = line.slice(0, separatorIndex).trim();
+        const value = line.slice(separatorIndex + 1).trim();
+        if (!currentSection) {
+          throw new Error(`缺少节定义，位于行：${line}`);
+        }
+        data[currentSection][key] = value;
+      }
+
+      if (!data.panel_id || !data.panel_info) {
+        throw new Error('ini 文件缺少必要的 [panel_id] 或 [panel_info] 节。');
+      }
+
+      const panelWidth = toNumber(data.panel_id.panel_xsize, 'panel_xsize');
+      const panelHeight = toNumber(data.panel_id.panel_ysize, 'panel_ysize');
+      const panelType = toNumber(data.panel_id.panel_type, 'panel_type');
+      const panelScan = toNumber(data.panel_info.panel_scan, 'panel_scan');
+      const panelDataNum = toNumber(data.panel_info.panel_datanum, 'panel_datanum');
+      const panelDataIcNum = toNumber(data.panel_info.data_icnum, 'data_icnum');
+
+      const ioMap = new Map();
+      for (const [key, value] of Object.entries(data.panel_info)) {
+        const match = key.match(/^data(\d+)_chip(\d+)$/i);
+        if (!match) continue;
+        const dataIndex = Number(match[1]);
+        const chipIndex = Number(match[2]);
+        if (!ioMap.has(dataIndex)) {
+          ioMap.set(dataIndex, { chips: [] });
+        }
+        const io = ioMap.get(dataIndex);
+        io.chips[chipIndex] = parseCoordinates(value, panelWidth, panelHeight);
+      }
+
+      if (ioMap.size === 0) {
+        throw new Error('未解析到任何 IO 芯片坐标，请检查 ini 文件内容。');
+      }
+
+      const ioEntries = Array.from(ioMap.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([index, { chips }]) => {
+          const normalizedChips = chips.filter(Boolean);
+          if (normalizedChips.length === 0) {
+            throw new Error(`IO${index} 未找到有效的芯片映射数据。`);
+          }
+          normalizedChips.forEach((chipCoords, chipIdx) => {
+            if (chipCoords.length === 0) {
+              throw new Error(`IO${index} 的 chip${chipIdx} 没有任何坐标数据。`);
+            }
+          });
+          return {
+            ioIndex: index,
+            chips: normalizedChips
+          };
+        });
+
+      if (panelDataNum !== ioEntries.length) {
+        console.warn(`panel_datanum=${panelDataNum} 与实际解析的 IO 数量 ${ioEntries.length} 不一致。`);
+      }
+
+      const panelNames = data.panel_name ? Object.entries(data.panel_name)
+        .sort((a, b) => Number(a[0]) - Number(b[0]))
+        .map(([, name]) => name.trim()) : [];
+
+      if (panelNames.length > 0) {
+        panelNameSelect.disabled = false;
+        for (const name of panelNames) {
+          const option = document.createElement('option');
+          option.value = name;
+          option.textContent = name;
+          panelNameSelect.appendChild(option);
+        }
+      }
+
+      return {
+        panelWidth,
+        panelHeight,
+        panelType,
+        panelScan,
+        panelDataNum,
+        panelDataIcNum,
+        panelNames,
+        ioEntries
+      };
+    }
+
+    function parseCoordinates(text, panelWidth, panelHeight) {
+      const coords = [];
+      const regex = /\((\d+),(\d+)\)/g;
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        const y = Number(match[1]);
+        const x = Number(match[2]);
+        if (![x, y].every(isWithinByteRange)) {
+          throw new Error(`坐标超出 0-255 范围：(${y},${x})`);
+        }
+        if (x !== 255 && x >= panelWidth) {
+          console.warn(`X=${x} 超出面板宽度 ${panelWidth}，仍按 255 处理。`);
+        }
+        if (y !== 255 && y >= panelHeight) {
+          console.warn(`Y=${y} 超出面板高度 ${panelHeight}，仍按 255 处理。`);
+        }
+        coords.push({ x: clampToByte(x), y: clampToByte(y) });
+      }
+      return coords;
+    }
+
+    function renderSummary(data) {
+      const summaryRows = [
+        ['面板尺寸', `${data.panelWidth} × ${data.panelHeight}`],
+        ['panel_type', String(data.panelType)],
+        ['panel_scan', String(data.panelScan)],
+        ['IO 数量 (panel_datanum)', `${data.panelDataNum}（实际解析：${data.ioEntries.length}）`],
+        ['每 IO 芯片数 (data_icnum)', String(data.panelDataIcNum)]
+      ];
+
+      const rowsHtml = [`<tr><th>字段</th><th>值</th></tr>`].concat(
+        summaryRows.map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`)
+      ).join('');
+      panelSummaryTable.innerHTML = rowsHtml;
+
+      const lines = [];
+      data.ioEntries.forEach((io, ioIdx) => {
+        lines.push(`IO${ioIdx}：芯片数量 ${io.chips.length}`);
+        io.chips.forEach((chip, chipIdx) => {
+          const formatted = chip.map(({ x, y }, index) => {
+            const pin = 15 - (index % 16);
+            return `  chip${chipIdx} - O${pin.toString().padStart(2, '0')} -> (${x}, ${y})`;
+          }).join('\n');
+          lines.push(formatted);
+        });
+        lines.push('');
+      });
+      ioSummaryTextarea.value = lines.join('\n');
+    }
+
+    function buildBinary(data) {
+      const header = new Uint8Array(8);
+      header[0] = clampToByte(data.panelWidth);
+      header[1] = clampToByte(data.panelHeight);
+      header[2] = clampToByte(data.ioEntries.length);
+      header[3] = 0;
+      header[4] = 0;
+      header[5] = 0; // CRC high placeholder
+      header[6] = 0; // CRC low placeholder
+      header[7] = 0; // checksum placeholder
+
+      const ioDescription = [];
+      const pinMappings = [];
+
+      data.ioEntries.forEach((io) => {
+        const chipCount = io.chips.length;
+        const pinCount = io.chips.reduce((total, chip) => total + chip.length, 0);
+        if (chipCount === 0 || pinCount === 0) {
+          throw new Error(`IO${io.ioIndex} 缺少芯片或坐标数据。`);
+        }
+        if (pinCount > 0xffff) {
+          throw new Error(`IO${io.ioIndex} 的控制点数超过 65535。`);
+        }
+        ioDescription.push((pinCount >> 8) & 0xff, pinCount & 0xff, clampToByte(chipCount), 0);
+
+        io.chips.forEach((chip) => {
+          chip.forEach(({ x, y }) => {
+            pinMappings.push(clampToByte(x), clampToByte(y));
+          });
+        });
+      });
+
+      const dotMappingLength = data.panelWidth * data.panelHeight * 3;
+      const dotMapping = new Uint8Array(dotMappingLength); // 填充 0
+
+      const payloadLength = ioDescription.length + pinMappings.length + dotMapping.length;
+      const payload = new Uint8Array(payloadLength);
+      payload.set(ioDescription, 0);
+      payload.set(pinMappings, ioDescription.length);
+      payload.set(dotMapping, ioDescription.length + pinMappings.length);
+
+      const crc = crc16Ccitt(payload);
+      header[5] = (crc >> 8) & 0xff;
+      header[6] = crc & 0xff;
+
+      const checksum = header.slice(0, 7).reduce((sum, value) => (sum + value) & 0xff, 0);
+      header[7] = checksum;
+
+      const output = new Uint8Array(header.length + payload.length);
+      output.set(header, 0);
+      output.set(payload, header.length);
+      return output;
+    }
+
+    function crc16Ccitt(bytes) {
+      let crc = 0xffff;
+      for (const byte of bytes) {
+        crc ^= (byte << 8);
+        for (let i = 0; i < 8; i += 1) {
+          if (crc & 0x8000) {
+            crc = (crc << 1) ^ 0x1021;
+          } else {
+            crc <<= 1;
+          }
+          crc &= 0xffff;
+        }
+      }
+      return crc;
+    }
+
+    function clampToByte(value) {
+      if (value < 0) return 0;
+      if (value > 255) return 255;
+      return value & 0xff;
+    }
+
+    function isWithinByteRange(value) {
+      const numeric = Number(value);
+      return Number.isInteger(numeric) && numeric >= 0 && numeric <= 255;
+    }
+
+    function toNumber(raw, fieldName) {
+      if (raw === undefined) {
+        throw new Error(`缺少字段：${fieldName}`);
+      }
+      const num = Number(raw);
+      if (!Number.isFinite(num)) {
+        throw new Error(`${fieldName} 不是有效的数字。`);
+      }
+      return num;
+    }
+
+    function resolveFileName() {
+      const custom = customNameInput.value.trim();
+      if (custom) {
+        return ensureBinExtension(custom);
+      }
+      if (panelNameSelect.value) {
+        return ensureBinExtension(panelNameSelect.value);
+      }
+      return 'panel.bin';
+    }
+
+    function ensureBinExtension(name) {
+      return name.toLowerCase().endsWith('.bin') ? name : `${name}.bin`;
+    }
+
+    function statusMessage(message, type = '') {
+      statusBox.textContent = message;
+      statusBox.className = type ? `status ${type}` : 'status';
+    }
+  </script>
+</body>
+</html>
